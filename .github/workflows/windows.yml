@@ -8,11 +8,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
       - name: Configure
         run: cmake -S . -B build -A x64
       - name: Build
         run: cmake --build build --config Release
+      - name: Bundle Qt runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Release/FlightSceneryManager.exe dist/
+          windeployqt --release --no-translations dist/FlightSceneryManager.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: FlightSceneryManager-Windows-x64
-          path: build/Release/FlightSceneryManager.exe
+          name: FlightSceneryManager-V0.3-Windows-x64
+          path: dist/
