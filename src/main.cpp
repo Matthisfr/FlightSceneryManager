@@ -1,59 +1,26 @@
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <string>
-#include <vector>
-namespace fs = std::filesystem;
-std::string esc(const std::string& s) {
- std::string o;
- for(char c:s) {
-  if(c=='"'||c=='\\'){o+='\\';o+=c;}
-  else if(c=='\n')o+="\\n";
-  else if((unsigned char)c<32)o+=' ';
-  else o+=c;
- }
- return o;
-}
-struct Package {std::string path,name,manifest,type;bool link;};
-int main(int argc,char**argv) {
- if(argc<2) {
-  std::cout<<"Flight Scenery Manager 0.1 - INVENTAIRE SEUL (aucune modification)\nUsage: FlightSceneryManager.exe <dossier1> [dossier2 ...]\n";
-  return 0;
- }
- std::vector<Package> found;
- std::error_code ec;
- for(int a=1;a<argc;++a) {
-  fs::path root=fs::u8path(argv[a]);
-  if(!fs::exists(root,ec)) {std::cerr<<"Dossier introuvable: "<<argv[a]<<"\n";continue;}
-  fs::recursive_directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;
-  while(it!=end) {
-   if(ec){ec.clear();it.increment(ec);continue;}
-   auto p=it->path();
-   if(it->is_directory(ec)) {
-    fs::path m=p/"manifest.json";
-    if(fs::is_regular_file(m,ec)) {
-     Package pkg;
-     pkg.path=p.u8string();
-     pkg.name=p.filename().u8string();
-     pkg.manifest=m.u8string();
-     pkg.link=fs::is_symlink(p,ec);
-     pkg.type="package MSFS (type et ICAO non verifies)";
-     found.push_back(pkg);
-     it.disable_recursion_pending();
-    }
-   }
-   it.increment(ec);
-  }
- }
- std::ofstream out("inventory.json",std::ios::binary|std::ios::trunc);
- if(!out){std::cerr<<"Impossible d'ecrire inventory.json\n";return 2;}
- out<<"{\n  \"schema\": 1,\n  \"mode\": \"read-only\",\n  \"packages\": [\n";
- for(size_t i=0;i<found.size();++i) {
-  const auto& p=found[i];
-  out<<"    {\"name\":\""<<esc(p.name)<<"\",\"path\":\""<<esc(p.path)<<"\",\"manifest\":\""<<esc(p.manifest)<<"\",\"is_symlink\":"<<(p.link?"true":"false")<<",\"classification\":\""<<p.type<<"\"}"<<(i+1<found.size()?",":"")<<"\n";
- }
- out<<"  ]\n}\n";
- out.close();
- std::cout<<found.size()<<" package(s) detecte(s). Inventaire: inventory.json\nAucun fichier MSFS n'a ete modifie.\n";
- return 0;
-}
+#include <QtWidgets>
+#include <QtNetwork>
+#include <QXmlStreamReader>
+#include <QUrlQuery>
+struct Airport { QString name, path, icao; };
+class Window : public QWidget {
+ Q_OBJECT
+ QLineEdit *user,*from,*to; QTableWidget *table,*matches; QLabel *info; QNetworkAccessManager net; QVector<Airport> airports; QStringList roots; QString alt;
+ static QString code(const QString &s) { QRegularExpression re("(?<![A-Z0-9])([A-Z]{4})(?![A-Z0-9])"); auto m=re.match(s.toUpper());return m.hasMatch()?m.captured(1):QString(); }
+ static QString xmlValue(const QByteArray &bytes,const QString &parent,const QString &child) {QXmlStreamReader x(bytes);QString current;while(!x.atEnd()){x.readNext();if(x.isStartElement()){QString tag=x.name().toString();if(tag==parent)current=parent;else if(current==parent&&tag==child)return x.readElementText().trimmed();}else if(x.isEndElement()&&x.name()==parent)current.clear();}return {}; }
+ static void addRow(QTableWidget *t,const QStringList &values) {int r=t->rowCount();t->insertRow(r);for(int i=0;i<values.size();++i)t->setItem(r,i,new QTableWidgetItem(values[i]));}
+ void suggest(){matches->setRowCount(0);QStringList codes={from->text().trimmed().toUpper(),to->text().trimmed().toUpper(),alt};QStringList roles={"Départ","Destination","Dégagement"};for(int i=0;i<codes.size();++i){if(codes[i].size()!=4)continue;QStringList names;for(auto &a:airports)if(a.icao==codes[i])names<<a.name;addRow(matches,{roles[i],codes[i],names.isEmpty()?"Non trouvé (à vérifier)":names.join(", "),names.isEmpty()?"Absent / ICAO inconnu":"Probable"});}}
+ void scan(){airports.clear();table->setRowCount(0);QSet<QString> seen;for(const auto &root:roots){QDirIterator it(root,{"manifest.json"},QDir::Files,QDirIterator::Subdirectories);int limit=0;while(it.hasNext()&&limit++<100000){QString mf=it.next();QString path=QFileInfo(mf).absolutePath();if(seen.contains(path))continue;seen.insert(path);QString name=QFileInfo(path).fileName();QString icao=code(name);airports.push_back({name,path,icao});addRow(table,{name,icao.isEmpty()?"?":icao,path});}}
+ QJsonArray list;for(auto &a:airports)list.append(QJsonObject{{"name",a.name},{"icao_candidate",a.icao},{"path",a.path}});QString dir=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);QDir().mkpath(dir);QSaveFile file(dir+"/inventory.json");if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"read_only",true},{"packages",list}}).toJson());file.commit();}
+ info->setText(QString("%1 packages trouvés • Lecture seule").arg(airports.size()));suggest();}
+ void simbrief(){QString id=user->text().trimmed();if(id.isEmpty())return;QSettings().setValue("simbrief",id);QUrl url("https://www.simbrief.com/api/xml.fetcher.php");QUrlQuery q;q.addQueryItem(QRegularExpression("^\\d+$").match(id).hasMatch()?"userid":"username",id);url.setQuery(q);info->setText("Chargement SimBrief...");auto *reply=net.get(QNetworkRequest(url));connect(reply,&QNetworkReply::finished,this,[this,reply]{QByteArray data=reply->readAll();bool ok=reply->error()==QNetworkReply::NoError;QString error=reply->errorString();reply->deleteLater();if(!ok){QMessageBox::warning(this,"SimBrief",error);return;}QString a=xmlValue(data,"origin","icao_code"),b=xmlValue(data,"destination","icao_code");if(a.isEmpty()||b.isEmpty()){QMessageBox::warning(this,"SimBrief","Aucun OFP exploitable. Vérifie ton identifiant et génère un vol.");return;}from->setText(a);to->setText(b);alt=xmlValue(data,"alternate","icao_code");suggest();info->setText("Plan chargé : "+a+" → "+b);});}
+ public:Window(){setWindowTitle("Flight Scenery Manager 0.3");resize(1350,850);setMinimumSize(950,650);auto *layout=new QVBoxLayout(this);layout->setContentsMargins(26,22,26,20);layout->setSpacing(14);auto *heading=new QLabel("✈  FLIGHT SCENERY MANAGER");heading->setObjectName("heading");layout->addWidget(heading);layout->addWidget(new QLabel("PRÉPARATION DU VOL   /   INVENTAIRE AUTOMATIQUE   /   MODE LECTURE SEULE"));
+ auto *top=new QHBoxLayout;user=new QLineEdit;user->setPlaceholderText("Identifiant SimBrief");auto *fetch=new QPushButton("↻ Charger le dernier vol");top->addWidget(user,2);top->addWidget(fetch);layout->addLayout(top);auto *route=new QHBoxLayout;from=new QLineEdit;to=new QLineEdit;from->setPlaceholderText("Départ ICAO");to->setPlaceholderText("Destination ICAO");route->addWidget(from);route->addWidget(new QLabel("→"));route->addWidget(to);layout->addLayout(route);
+ layout->addWidget(new QLabel("AÉROPORTS PROPOSÉS POUR LE VOL"));matches=new QTableWidget(0,4);matches->setHorizontalHeaderLabels({"Rôle","ICAO","Scène locale","État"});matches->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);matches->setEditTriggers(QAbstractItemView::NoEditTriggers);layout->addWidget(matches,1);
+ layout->addWidget(new QLabel("BIBLIOTHÈQUE DE SCÈNES"));table=new QTableWidget(0,3);table->setHorizontalHeaderLabels({"Package","ICAO présumé","Emplacement"});table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);table->setEditTriggers(QAbstractItemView::NoEditTriggers);layout->addWidget(table,2);
+ auto *bottom=new QHBoxLayout;auto *add=new QPushButton("＋ Ajouter un dossier");auto *refresh=new QPushButton("↻ Actualiser");bottom->addWidget(add);bottom->addWidget(refresh);bottom->addStretch();layout->addLayout(bottom);info=new QLabel("Aucun fichier de scène ne sera modifié.");layout->addWidget(info);
+ setStyleSheet("QWidget{background:#0b1423;color:#e4f1ff;font:13px 'Segoe UI'} QLabel#heading{font-size:26px;font-weight:800;color:#5bd9f5} QPushButton{background:#19435d;color:#ecfaff;border:1px solid #3c7897;border-radius:8px;padding:12px;font-weight:700} QPushButton:hover{background:#28617e} QLineEdit{background:#12263b;border:1px solid #38556f;border-radius:7px;padding:11px} QTableWidget{background:#12243a;alternate-background-color:#172c43;border:1px solid #2c4864;gridline-color:#203950} QHeaderView::section{background:#1d3852;color:#a5c9df;padding:9px;border:0}");
+ QSettings settings("FlightSceneryManager","FlightSceneryManager");roots=settings.value("roots").toStringList();user->setText(settings.value("simbrief").toString());connect(fetch,&QPushButton::clicked,this,[this]{simbrief();});connect(refresh,&QPushButton::clicked,this,[this]{scan();});connect(add,&QPushButton::clicked,this,[this]{QString d=QFileDialog::getExistingDirectory(this,"Choisir le dossier des scènes");if(!d.isEmpty()&&!roots.contains(d)){roots<<d;QSettings("FlightSceneryManager","FlightSceneryManager").setValue("roots",roots);scan();}});connect(from,&QLineEdit::textChanged,this,[this]{suggest();});connect(to,&QLineEdit::textChanged,this,[this]{suggest();});scan();}
+};
+int main(int argc,char **argv){QApplication app(argc,argv);app.setOrganizationName("FlightSceneryManager");app.setApplicationName("FlightSceneryManager");Window window;window.show();return app.exec();}
+#include "main.moc"
