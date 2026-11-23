@@ -25,5 +25,5 @@ jobs:
           windeployqt --release --no-translations dist/FlightSceneryManager.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: FlightSceneryManager-V0.3.3-Windows-x64
+          name: FlightSceneryManager-V0.4.0-Windows-x64
           path: dist/
