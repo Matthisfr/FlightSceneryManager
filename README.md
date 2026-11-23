@@ -1,11 +1,11 @@
-# Flight Scenery Manager — V0.4.0 (prototype Windows)
+# Flight Scenery Manager — V0.4.1 (prototype Windows)
 
 Gestionnaire de bibliothèques de scènes pour MSFS 2024, en C++/Qt 6.
 
 ## Fonctions disponibles
 - Analyse des dossiers de packages MSFS sans parcourir le contenu de chaque package après détection de manifest.json.
 - Analyse en arrière-plan avec indicateur d'activité et inventaire mis en cache au redémarrage.
-- Identification indicative d'ICAO par noms explicites de BGL, titre du manifeste et nom de dossier. **Ces indices ne prouvent pas l'ICAO réellement contenu dans un BGL.**
+- Identification indicative d'ICAO par layout.json, noms explicites de BGL, titre du manifeste et nom de dossier. Si plusieurs ICAO sont suggérés dans un package, celui-ci est marqué ambigu et sa validation comme aéroport unique est bloquée. **Ces indices ne prouvent pas l'ICAO réellement contenu dans un BGL.**
 - Validation manuelle d'un ICAO : double-cliquer sur sa cellule dans la bibliothèque, puis saisir le code de quatre lettres. Les corrections sont mémorisées par chemin de package.
 - Sélection d'au plus un package par ICAO **validé manuellement**. Les choix sont mémorisés. Les packages non validés ne sont pas sélectionnables.
 - Chargement du dernier vol SimBrief : départ, destination, dégagement et durée estimée si disponible.
@@ -18,4 +18,4 @@ Gestionnaire de bibliothèques de scènes pour MSFS 2024, en C++/Qt 6.
 - Les dossiers de packages accessibles par liens symboliques ne sont pas parcourus.
 
 ## Télécharger
-Dans GitHub Actions, ouvrir la dernière exécution réussie du workflow **Windows EXE**, puis télécharger l'artifact **FlightSceneryManager-V0.4.0-Windows-x64**. Décompresser et lancer FlightSceneryManager.exe. Une compilation réussie doit être confirmée avant utilisation.
+Dans GitHub Actions, ouvrir la dernière exécution réussie du workflow **Windows EXE**, puis télécharger l'artifact **FlightSceneryManager-V0.4.1-Windows-x64**. Décompresser et lancer FlightSceneryManager.exe. Une compilation réussie doit être confirmée avant utilisation.
