@@ -1,4 +1,5 @@
 #include <QtWidgets>
+#include <algorithm>
 #include <QtNetwork>
 #include <QtConcurrent>
 #include <QFutureWatcher>
