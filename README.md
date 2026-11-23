@@ -1,27 +1,21 @@
-# Flight Scenery Manager — V0.1
+# Flight Scenery Manager — V0.4.0 (prototype Windows)
 
-Prototype C++17 autonome, **lecture seule** : ne modifie aucun package ni lien Windows.
+Gestionnaire de bibliothèques de scènes pour MSFS 2024, en C++/Qt 6.
 
-## Fonctionnement
-- Analyse les dossiers fournis en arguments à chaque exécution (donc détecte les nouveaux packages au prochain lancement).
-- Recherche les dossiers contenant `manifest.json`.
-- Exporte `inventory.json` dans le dossier de travail.
-- Ne détermine pas encore les ICAO, les dépendances ni les changements entre deux scans.
-- Pas encore d'interface Qt, de SimBrief, de surveillance en temps réel ou d'activation/désactivation.
+## Fonctions disponibles
+- Analyse des dossiers de packages MSFS sans parcourir le contenu de chaque package après détection de manifest.json.
+- Analyse en arrière-plan avec indicateur d'activité et inventaire mis en cache au redémarrage.
+- Identification indicative d'ICAO par noms explicites de BGL, titre du manifeste et nom de dossier. **Ces indices ne prouvent pas l'ICAO réellement contenu dans un BGL.**
+- Validation manuelle d'un ICAO : double-cliquer sur sa cellule dans la bibliothèque, puis saisir le code de quatre lettres. Les corrections sont mémorisées par chemin de package.
+- Sélection d'au plus un package par ICAO **validé manuellement**. Les choix sont mémorisés. Les packages non validés ne sont pas sélectionnables.
+- Chargement du dernier vol SimBrief : départ, destination, dégagement et durée estimée si disponible.
+- Réglage persistant de la taille des textes.
 
-## Télécharger l'EXE Windows
-Ouvrir **Actions > Windows EXE**. Après un lancement réussi, ouvrir le run puis télécharger l'artifact **FlightSceneryManager-Windows-x64**. Le build est automatique à chaque push sur `main`, et peut aussi être lancé via **Run workflow**.
+## Limitations de sécurité
+- **Lecture seule : aucune activation, désactivation, copie, déplacement ou suppression de scènes.** Les cases représentent des préférences, pas l'état actif de MSFS.
+- L'analyseur ne décode pas encore les données internes des BGL, ne détecte pas les aéroports multiples dans un package et ne garantit pas l'absence de conflits réels.
+- Les codes validés manuellement restent sous la responsabilité de l'utilisateur.
+- Les dossiers de packages accessibles par liens symboliques ne sont pas parcourus.
 
-Dans une invite de commandes Windows :
-```bat
-FlightSceneryManager.exe "D:\\MSFS_Addons" "D:\\AutresScenes"
-```
-
-L'inventaire contient des chemins locaux : ne pas le publier. Ne pas analyser de dossiers sensibles.
-
-## Feuille de route
-1. Interface Qt 6 et sélection des dossiers.
-2. Comparaison d'inventaires et détection des ajouts, suppressions, modifications.
-3. Détection ICAO fiable et reconnaissance des liens Windows / Addons Linker.
-4. SimBrief et simulation d'activation.
-5. Gestion réelle avec sauvegardes et restauration, après validation.
+## Télécharger
+Dans GitHub Actions, ouvrir la dernière exécution réussie du workflow **Windows EXE**, puis télécharger l'artifact **FlightSceneryManager-V0.4.0-Windows-x64**. Décompresser et lancer FlightSceneryManager.exe. Une compilation réussie doit être confirmée avant utilisation.
