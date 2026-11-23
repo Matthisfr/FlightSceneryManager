@@ -5,7 +5,44 @@
 #include <QFutureWatcher>
 #include <QXmlStreamReader>
 #include <QUrlQuery>
-struct Airport { QString name, path, icao; };
+struct Airport { QString name, path, icao, source; };
+static Airport identifyPackage(const QString &path){
+ Airport a; a.path=path;a.name=QFileInfo(path).fileName();
+ QRegularExpression explicitCode("(?:^|[-_ .])(?:airport|apt|icao)[-_ .]+([A-Z]{4})(?:$|[-_ .])",QRegularExpression::CaseInsensitiveOption);
+ QRegularExpression codeToken("(?:^|[-_ .])([A-Z]{4})(?:$|[-_ .])",QRegularExpression::CaseInsensitiveOption);
+ auto accept=[&](const QString &value,const QString &source,bool explicitOnly)->bool{
+  auto m=(explicitOnly?explicitCode:codeToken).match(value);
+  if(!m.hasMatch())return false;
+  QString c=m.captured(1).toUpper();
+  if(c=="MSFS"||c=="ASOBO"||c=="BASE"||c=="DATA"||c=="SCEN"||c=="PACK"||c=="CITY")return false;
+  a.icao=c;a.source=source;return true;
+ };
+ // Filename of airport BGLs is often more specific than package directory.
+ QDir scenery(path+"/scenery");
+ if(scenery.exists()){
+  QStringList dirs={scenery.absolutePath()};
+  int visited=0;
+  while(!dirs.isEmpty()&&visited++<120){
+   QDir d(dirs.takeLast());
+   for(const auto &fi:d.entryInfoList(QDir::Files|QDir::NoDotAndDotDot)){
+    if(fi.suffix().compare("bgl",Qt::CaseInsensitive)!=0)continue;
+    if(accept(fi.completeBaseName(),"BGL (nom explicite)",true))return a;
+   }
+   for(const auto &di:d.entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot|QDir::NoSymLinks))dirs<<di.absoluteFilePath();
+  }
+ }
+ // Manifest titles may provide an explicit ICAO, but not all packages do.
+ QFile manifest(path+"/manifest.json");
+ if(manifest.open(QIODevice::ReadOnly)){
+  auto doc=QJsonDocument::fromJson(manifest.read(65536));
+  QString title=doc.object().value("title").toString();
+  if(accept(title,"Manifest (nom explicite)",true))return a;
+ }
+ if(accept(a.name,"Dossier (nom explicite)",true))return a;
+ // A loose four-letter match is a hint only, not a confirmed airport.
+ if(accept(a.name,"Dossier (supposé)",false))return a;
+ return a;
+}
 class Window : public QWidget {
  Q_OBJECT
  QLineEdit *user,*from,*to; QTableWidget *table,*matches; QLabel *info; QNetworkAccessManager net; QVector<Airport> airports; QStringList roots; QString alt; QFutureWatcher<QVector<Airport>> watcher; QPushButton *refreshButton=nullptr; QProgressBar *progress=nullptr; QLabel *scanDetail=nullptr,*libraryTitle=nullptr,*durationLabel=nullptr; QLineEdit *alternate=nullptr; QSet<QString> selectedPaths; bool filling=false;
@@ -15,7 +52,7 @@ class Window : public QWidget {
  void choose(const QString &path,bool checked){
   auto it=std::find_if(airports.cbegin(),airports.cend(),[&](const Airport &a){return a.path==path;});
   if(it==airports.cend())return;
-  if(checked && it->icao.isEmpty()){QMessageBox::information(this,"ICAO inconnu","Sélection impossible sans code ICAO.");render();return;}
+  if(checked && (it->icao.isEmpty()||it->source=="Dossier (supposé)")){QMessageBox::information(this,"ICAO non confirmé","Ce code est seulement supposé. Sélection bloquée pour éviter les conflits.");render();return;}
   if(checked){for(const auto &a:airports)if(a.icao==it->icao)selectedPaths.remove(a.path);selectedPaths.insert(path);}
   else selectedPaths.remove(path);
   QSettings("FlightSceneryManager","FlightSceneryManager").setValue("selectedPaths",QStringList(selectedPaths.values()));
@@ -34,7 +71,7 @@ class Window : public QWidget {
     auto *check=new QTableWidgetItem;check->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);check->setCheckState(selectedPaths.contains(a.path)?Qt::Checked:Qt::Unchecked);check->setData(Qt::UserRole,a.path);matches->setItem(row,0,check);
     matches->setItem(row,1,new QTableWidgetItem(icao));
     matches->setItem(row,2,new QTableWidgetItem(a.name));
-    matches->setItem(row,3,new QTableWidgetItem(selectedPaths.contains(a.path)?"Sélectionnée":"Disponible"));
+    matches->setItem(row,3,new QTableWidgetItem(selectedPaths.contains(a.path)?"Sélectionnée":a.source.isEmpty()?"ICAO inconnu":a.source));
    }
    if(!found){int row=matches->rowCount();matches->insertRow(row);matches->setItem(row,1,new QTableWidgetItem(icao));matches->setItem(row,2,new QTableWidgetItem("Non trouvée"));matches->setItem(row,3,new QTableWidgetItem("À vérifier"));}
   }
@@ -45,7 +82,7 @@ class Window : public QWidget {
   QSet<QString> codes;int identified=0;
   for(int i=0;i<airports.size();++i){
    const auto &a=airports[i];if(!a.icao.isEmpty()){codes.insert(a.icao);++identified;}
-   table->setItem(i,0,new QTableWidgetItem(a.icao.isEmpty()?"?":a.icao));
+   auto *icaoItem=new QTableWidgetItem(a.icao.isEmpty()?"?":a.icao);icaoItem->setToolTip(a.source.isEmpty()?"ICAO non identifié":a.source);table->setItem(i,0,icaoItem);
    auto *check=new QTableWidgetItem;check->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);check->setCheckState(selectedPaths.contains(a.path)?Qt::Checked:Qt::Unchecked);check->setData(Qt::UserRole,a.path);table->setItem(i,1,check);
    table->setItem(i,2,new QTableWidgetItem(a.name));table->setItem(i,3,new QTableWidgetItem(a.path));
   }
@@ -54,7 +91,7 @@ class Window : public QWidget {
   filling=false;suggest();
  }
  QString inventoryPath() const {return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)+"/inventory.json";}
- void loadCache(){QFile file(inventoryPath());if(!file.open(QIODevice::ReadOnly))return;auto doc=QJsonDocument::fromJson(file.readAll());auto arr=doc.object().value("packages").toArray();for(const auto &v:arr){auto o=v.toObject();airports.push_back({o.value("name").toString(),o.value("path").toString(),o.value("icao_candidate").toString()});}render();info->setText(QString("%1 packages en cache • Actualiser pour rescanner").arg(airports.size()));}
+ void loadCache(){QFile file(inventoryPath());if(!file.open(QIODevice::ReadOnly))return;auto doc=QJsonDocument::fromJson(file.readAll());auto arr=doc.object().value("packages").toArray();for(const auto &v:arr){auto o=v.toObject();airports.push_back({o.value("name").toString(),o.value("path").toString(),o.value("icao_candidate").toString(),o.value("icao_source").toString()});}render();info->setText(QString("%1 packages en cache • Actualiser pour rescanner").arg(airports.size()));}
  void scan(){
  if(watcher.isRunning())return;
  refreshButton->setEnabled(false);progress->show();progress->setRange(0,0);
@@ -64,7 +101,6 @@ class Window : public QWidget {
  QPointer<Window> self(this);
  watcher.setFuture(QtConcurrent::run([paths,self](){
   QVector<Airport> result;QSet<QString> seen;
-  QRegularExpression re("(?<![A-Z0-9])([A-Z]{4})(?![A-Z0-9])");
   QStringList pending=paths;int checked=0;
   while(!pending.isEmpty()){
    QString dir=pending.takeLast();QFileInfo di(dir);
@@ -77,9 +113,7 @@ class Window : public QWidget {
    if(QFileInfo::exists(folder.filePath("manifest.json"))){
     QString path=di.absoluteFilePath();
     if(!seen.contains(path)){
-     seen.insert(path);QString name=di.fileName();
-     auto m=re.match(name.toUpper());
-     result.push_back({name,path,m.hasMatch()?m.captured(1):QString()});
+     seen.insert(path);result.push_back(identifyPackage(path));
     }
     continue;
    }
@@ -97,9 +131,9 @@ class Window : public QWidget {
   return result;
  }));
 }
- void scanFinished(){airports=watcher.result();render();QJsonArray list;for(const auto &a:airports)list.append(QJsonObject{{"name",a.name},{"icao_candidate",a.icao},{"path",a.path}});QString dir=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);QDir().mkpath(dir);QSaveFile file(inventoryPath());if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"read_only",true},{"packages",list}}).toJson());file.commit();}refreshButton->setEnabled(true);progress->hide();scanDetail->setText(QString("Analyse terminée : %1 packages").arg(airports.size()));info->setText(QString("%1 packages trouvés • Inventaire sauvegardé").arg(airports.size()));}
+ void scanFinished(){airports=watcher.result();render();QJsonArray list;for(const auto &a:airports)list.append(QJsonObject{{"name",a.name},{"icao_candidate",a.icao},{"icao_source",a.source},{"path",a.path}});QString dir=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);QDir().mkpath(dir);QSaveFile file(inventoryPath());if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"read_only",true},{"packages",list}}).toJson());file.commit();}refreshButton->setEnabled(true);progress->hide();scanDetail->setText(QString("Analyse terminée : %1 packages").arg(airports.size()));info->setText(QString("%1 packages trouvés • Inventaire sauvegardé").arg(airports.size()));}
  void simbrief(){QString id=user->text().trimmed();if(id.isEmpty())return;QSettings("FlightSceneryManager","FlightSceneryManager").setValue("simbrief",id);QUrl url("https://www.simbrief.com/api/xml.fetcher.php");QUrlQuery q;q.addQueryItem(QRegularExpression("^\\d+$").match(id).hasMatch()?"userid":"username",id);url.setQuery(q);info->setText("Chargement SimBrief...");auto *reply=net.get(QNetworkRequest(url));connect(reply,&QNetworkReply::finished,this,[this,reply]{QByteArray data=reply->readAll();bool ok=reply->error()==QNetworkReply::NoError;QString error=reply->errorString();reply->deleteLater();if(!ok){QMessageBox::warning(this,"SimBrief",error);return;}QString a=xmlValue(data,"origin","icao_code"),b=xmlValue(data,"destination","icao_code");if(a.isEmpty()||b.isEmpty()){QMessageBox::warning(this,"SimBrief","Aucun OFP exploitable. Vérifie ton identifiant et génère un vol.");return;}from->setText(a);to->setText(b);alternate->setText(xmlValue(data,"alternate","icao_code"));QString seconds=xmlValue(data,"times","est_time_enroute");if(seconds.isEmpty())seconds=xmlValue(data,"times","sched_time_enroute");bool valid=false;int secs=seconds.toInt(&valid);durationLabel->setText(valid?QString("Durée prévue : %1 h %2 min").arg(secs/3600).arg((secs%3600)/60,2,10,QChar('0')):"Durée prévue : non disponible");suggest();info->setText("Plan chargé : "+a+" → "+b);});}
- public:Window(){setWindowTitle("Flight Scenery Manager 0.3.3");resize(1350,850);setMinimumSize(950,650);auto *layout=new QVBoxLayout(this);layout->setContentsMargins(26,22,26,20);layout->setSpacing(14);auto *heading=new QLabel("✈  FLIGHT SCENERY MANAGER");heading->setObjectName("heading");layout->addWidget(heading);layout->addWidget(new QLabel("PRÉPARATION DU VOL   /   INVENTAIRE AUTOMATIQUE   /   MODE LECTURE SEULE"));
+ public:Window(){setWindowTitle("Flight Scenery Manager 0.3.4");resize(1350,850);setMinimumSize(950,650);auto *layout=new QVBoxLayout(this);layout->setContentsMargins(26,22,26,20);layout->setSpacing(14);auto *heading=new QLabel("✈  FLIGHT SCENERY MANAGER");heading->setObjectName("heading");layout->addWidget(heading);layout->addWidget(new QLabel("PRÉPARATION DU VOL   /   INVENTAIRE AUTOMATIQUE   /   MODE LECTURE SEULE"));
  auto *top=new QHBoxLayout;user=new QLineEdit;user->setPlaceholderText("Identifiant SimBrief");auto *fetch=new QPushButton("↻ Charger le dernier vol");top->addWidget(user,2);top->addWidget(fetch);layout->addLayout(top);auto *route=new QHBoxLayout;from=new QLineEdit;to=new QLineEdit;from->setPlaceholderText("Départ ICAO");to->setPlaceholderText("Destination ICAO");route->addWidget(from);route->addWidget(new QLabel("→"));route->addWidget(to);alternate=new QLineEdit;alternate->setPlaceholderText("Dégagement ICAO");route->addWidget(alternate);layout->addLayout(route);durationLabel=new QLabel("Durée prévue : —");layout->addWidget(durationLabel);
  layout->addWidget(new QLabel("AÉROPORTS PROPOSÉS POUR LE VOL"));matches=new QTableWidget(0,4);matches->setHorizontalHeaderLabels({"Choix","ICAO","Scène locale","État"});matches->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);matches->setEditTriggers(QAbstractItemView::NoEditTriggers);layout->addWidget(matches,1);
  libraryTitle=new QLabel("BIBLIOTHÈQUE DE SCÈNES");layout->addWidget(libraryTitle);table=new QTableWidget(0,4);table->setHorizontalHeaderLabels({"ICAO","Choix","Package","Emplacement"});table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);table->setEditTriggers(QAbstractItemView::NoEditTriggers);layout->addWidget(table,2);
